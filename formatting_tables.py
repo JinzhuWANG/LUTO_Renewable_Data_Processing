@@ -1,16 +1,24 @@
 import pandas as pd
-import shutil
 
 
 # Define data root path
 data_root = 'N:/Data-Master/Renewable Energy'
 
+state_rename = {
+    'NSW': 'New South Wales',
+    'VIC': 'Victoria',
+    'QLD': 'Queensland',
+    'SA': 'South Australia',
+    'WA': 'Western Australia',
+    'TAS': 'Tasmania',
+    'NT': 'Northern Territory',
+    'ACT': 'Australian Capital Territory'
+}
 
 
 # ---------------------------------------------------
 #               Electricity Price Table              
 # ---------------------------------------------------
-# TODO: rename state to full names to match other tables
 
 df = pd.read_csv(f'{data_root}/20260127/elec_price_forecast.csv')
 
@@ -25,6 +33,9 @@ df = df[year_cols].astype(float).mul(10).T
 df.index = df.index.astype(int)
 df.index.name = 'Year'
 
+# Rename states to full names
+df = df.rename(columns=state_rename)
+
 # Save
 df.to_csv(f'{data_root}/processed/renewable_elec_price_AUD_MWh.csv')
 
@@ -36,17 +47,6 @@ df.to_csv(f'{data_root}/processed/renewable_elec_price_AUD_MWh.csv')
 '''
 Just need to rename the abbreviated state names to full names to match other tables.
 '''
-# TODO: rename states to full names to match other tables
-state_rename = {
-    'NSW': 'New South Wales',
-    'VIC': 'Victoria',
-    'QLD': 'Queensland',
-    'SA': 'South Australia',
-    'WA': 'Western Australia',
-    'TAS': 'Tasmania',
-    'NT': 'Northern Territory',
-    'ACT': 'Australian Capital Territory'
-}
 
 re_targets = pd.read_csv(f'{data_root}/20260127/renewable_targets.csv')
 re_targets['STATE'] = re_targets['STATE'].map(state_rename)
