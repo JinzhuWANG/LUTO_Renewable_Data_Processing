@@ -34,10 +34,12 @@ df.index = df.index.astype(int)
 df.index.name = 'Year'
 
 # Rename states to full names
-df = df.rename(columns=state_rename)
+df = df.rename(columns=state_rename).reset_index()
+df = df.melt(id_vars='Year', var_name='State', value_name='Price_AUD_per_MWh').set_index(['Year', 'State']).reset_index()
+
 
 # Save
-df.to_csv(f'{data_root}/processed/renewable_elec_price_AUD_MWh.csv')
+df.to_csv(f'{data_root}/processed/renewable_elec_price_AUD_MWh.csv', index=False)
 
 
 
@@ -102,7 +104,9 @@ for category in wind_sheet_names:
     solar_df = pd.concat([solar_df, data])
 
 
-# Save bundled data
+# Save bundled data; Capitalise the 'Commodity' column for consistency
+onshore_wind_df['Commodity'] = onshore_wind_df['Commodity'].str.capitalize()
+solar_df['Commodity'] = solar_df['Commodity'].str.capitalize()
 renewable_bundle_df = pd.concat([onshore_wind_df, solar_df], axis=0).reset_index()
 renewable_bundle_df.to_csv(f'{data_root}/processed/renewable_energy_bundle.csv', index=False)
 
