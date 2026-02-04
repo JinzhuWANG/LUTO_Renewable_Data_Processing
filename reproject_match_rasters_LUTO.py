@@ -38,8 +38,8 @@ raw_solar_filled = fill_with_nearest(solar_matched)
 raw_wind_filled = fill_with_nearest(wind_matched)
 
 # Mask to LUTO valid areas
-solar_matched_masked = raw_solar_filled.where(luto_mask).expand_dims({'Type': ['solar']})
-wind_matched_masked = raw_wind_filled.where(luto_mask).expand_dims({'Type': ['wind']})
+solar_matched_masked = raw_solar_filled.where(luto_mask).expand_dims({'Type': ["UTILITY SOLAR PV"]})
+wind_matched_masked = raw_wind_filled.where(luto_mask).expand_dims({'Type': ["ONSHORE WIND"]})
 
 
 
@@ -61,8 +61,8 @@ raw_solar_exp_filled = fill_with_nearest(solar_exp_matched, to_fill=0)
 raw_wind_exp_filled = fill_with_nearest(wind_exp_matched, to_fill=0)
 
 # Mask to LUTO valid areas
-solar_exp_matched_masked = raw_solar_exp_filled.where(luto_mask).expand_dims({'year': [year], 'Type': ['solar']})
-wind_exp_matched_masked = raw_wind_exp_filled.where(luto_mask).expand_dims({'year': [year], 'Type': ['wind']})
+solar_exp_matched_masked = raw_solar_exp_filled.where(luto_mask).expand_dims({'year': [year], 'Type': ["UTILITY SOLAR PV"]})
+wind_exp_matched_masked = raw_wind_exp_filled.where(luto_mask).expand_dims({'year': [year], 'Type': ["ONSHORE WIND"]})
 
 
 
@@ -101,8 +101,8 @@ raw_solar_opex_filled = fill_with_nearest(solar_opex_matched)
 raw_wind_opex_filled = fill_with_nearest(wind_opex_matched)
 
 # Mask to LUTO valid areas
-solar_opex_matched_masked = raw_solar_opex_filled.where(luto_mask).expand_dims({'year': [year], 'Type': ['solar']})
-wind_opex_matched_masked = raw_wind_opex_filled.where(luto_mask).expand_dims({'year': [year], 'Type': ['wind']})
+solar_opex_matched_masked = raw_solar_opex_filled.where(luto_mask).expand_dims({'year': [year], 'Type': ["UTILITY SOLAR PV"]})
+wind_opex_matched_masked = raw_wind_opex_filled.where(luto_mask).expand_dims({'year': [year], 'Type': ["ONSHORE WIND"]})
 
 
 
