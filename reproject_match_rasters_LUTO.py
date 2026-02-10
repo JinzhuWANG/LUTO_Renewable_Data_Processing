@@ -38,8 +38,8 @@ raw_solar_filled = fill_with_nearest(solar_matched)
 raw_wind_filled = fill_with_nearest(wind_matched)
 
 # Mask to LUTO valid areas
-solar_matched_masked = raw_solar_filled.where(luto_mask).expand_dims({'Type': ["UTILITY SOLAR PV"]})
-wind_matched_masked = raw_wind_filled.where(luto_mask).expand_dims({'Type': ["ONSHORE WIND"]})
+solar_matched_masked = raw_solar_filled.where(luto_mask).expand_dims({'Type': ["Utility Solar PV"]})
+wind_matched_masked = raw_wind_filled.where(luto_mask).expand_dims({'Type': ["Onshore Wind"]})
 
 
 
@@ -61,8 +61,8 @@ raw_solar_exp_filled = fill_with_nearest(solar_exp_matched, to_fill=0)
 raw_wind_exp_filled = fill_with_nearest(wind_exp_matched, to_fill=0)
 
 # Mask to LUTO valid areas
-solar_exp_matched_masked = raw_solar_exp_filled.where(luto_mask).expand_dims({'year': [year], 'Type': ["UTILITY SOLAR PV"]})
-wind_exp_matched_masked = raw_wind_exp_filled.where(luto_mask).expand_dims({'year': [year], 'Type': ["ONSHORE WIND"]})
+solar_exp_matched_masked = raw_solar_exp_filled.where(luto_mask).expand_dims({'year': [year], 'Type': ["Utility Solar PV"]})
+wind_exp_matched_masked = raw_wind_exp_filled.where(luto_mask).expand_dims({'year': [year], 'Type': ["Onshore Wind"]})
 
 
 
@@ -101,8 +101,8 @@ raw_solar_opex_filled = fill_with_nearest(solar_opex_matched)
 raw_wind_opex_filled = fill_with_nearest(wind_opex_matched)
 
 # Mask to LUTO valid areas
-solar_opex_matched_masked = raw_solar_opex_filled.where(luto_mask).expand_dims({'year': [year], 'Type': ["UTILITY SOLAR PV"]})
-wind_opex_matched_masked = raw_wind_opex_filled.where(luto_mask).expand_dims({'year': [year], 'Type': ["ONSHORE WIND"]})
+solar_opex_matched_masked = raw_solar_opex_filled.where(luto_mask).expand_dims({'year': [year], 'Type': ["Utility Solar PV"]})
+wind_opex_matched_masked = raw_wind_opex_filled.where(luto_mask).expand_dims({'year': [year], 'Type': ["Onshore Wind"]})
 
 
 
@@ -114,7 +114,7 @@ wind_opex_matched_masked = raw_wind_opex_filled.where(luto_mask).expand_dims({'y
 re_datasets_2D = xr.Dataset({
     'Capacity_percent_of_natural_energy': xr.concat([solar_matched_masked, wind_matched_masked], dim='Type'),
     'Cost_of_install_AUD_ha': xr.concat([solar_exp_matched_masked, wind_exp_matched_masked], dim='Type'),
-    'Distribution_loss_percent_of_generation': dlf_matched_masked,
+    'Energy_remain_percent_after_distribution': dlf_matched_masked,
     'Cost_of_operation': xr.concat([solar_opex_matched_masked, wind_opex_matched_masked], dim='Type'),
 })
 

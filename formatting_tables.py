@@ -21,34 +21,33 @@ state_rename = {
 #               Electricity Price Table              
 # ---------------------------------------------------
 
-df = pd.read_csv(f'{data_root}/20260127/elec_price_forecast.csv')
 
-# Filter to Electricity sector if present, index by State
-if 'Sector' in df.columns:
-    df = df[df['Sector'] == 'Electricity']
-df = df.set_index('State')
-
-# Keep only year columns, convert c/kWh -> $/MWh (x10), transpose
-year_cols = [c for c in df.columns if str(c).isdigit()]
-df = df[year_cols].astype(float).mul(10).T
-df.index = df.index.astype(int)
-df.index.name = 'Year'
-
-# Rename states to full names
-df = df.rename(columns=state_rename).reset_index()
+# Solar
+df = pd.read_csv(f'{data_root}/20260210/solar_elec_price_AUD_MWh.csv')
+df = df.rename(columns=state_rename).reset_index(drop=True)
 df = df.melt(id_vars='Year', var_name='State', value_name='Price_AUD_per_MWh').set_index(['Year', 'State']).reset_index()
 
-
-# Fill price between 2010 and 2021 with 2021 prices
 for state in df['State'].unique():
     price_2021 = df[(df['Year'] == 2021) & (df['State'] == state)]['Price_AUD_per_MWh'].values[0]
     for year in range(2010, 2021):
         df = pd.concat([df, pd.DataFrame({'Year': [year], 'State': [state], 'Price_AUD_per_MWh': [price_2021]})], ignore_index=True)
 
-
-# Save
 df = df.sort_values(['State', 'Year'])
-df.to_csv(f'{data_root}/processed/renewable_elec_price_AUD_MWh.csv', index=False)
+df.to_csv(f'{data_root}/processed/renewable_price_AUD_MWh_solar.csv', index=False)
+
+# Wind
+df = pd.read_csv(f'{data_root}/20260210/wind_elec_price_AUD_MWh.csv')
+
+df = df.rename(columns=state_rename).reset_index(drop=True)
+df = df.melt(id_vars='Year', var_name='State', value_name='Price_AUD_per_MWh').set_index(['Year', 'State']).reset_index()
+
+for state in df['State'].unique():
+    price_2021 = df[(df['Year'] == 2021) & (df['State'] == state)]['Price_AUD_per_MWh'].values[0]
+    for year in range(2010, 2021):
+        df = pd.concat([df, pd.DataFrame({'Year': [year], 'State': [state], 'Price_AUD_per_MWh': [price_2021]})], ignore_index=True)
+        
+df = df.sort_values(['State', 'Year'])
+df.to_csv(f'{data_root}/processed/renewable_price_AUD_MWh_wind.csv', index=False)
 
 
 
