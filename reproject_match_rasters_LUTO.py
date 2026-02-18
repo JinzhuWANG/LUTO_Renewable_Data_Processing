@@ -112,10 +112,10 @@ wind_opex_matched_masked = raw_wind_opex_filled.where(luto_mask).expand_dims({'y
 
 # Save as 2D first
 re_datasets_2D = xr.Dataset({
-    'Capacity_percent_of_natural_energy': xr.concat([solar_matched_masked, wind_matched_masked], dim='Type'),
-    'Cost_of_install_AUD_ha': xr.concat([solar_exp_matched_masked, wind_exp_matched_masked], dim='Type'),
-    'Energy_remain_percent_after_distribution': dlf_matched_masked,
-    'Cost_of_operation': xr.concat([solar_opex_matched_masked, wind_opex_matched_masked], dim='Type'),
+    'capacity_factor_multiplier': xr.concat([solar_matched_masked, wind_matched_masked], dim='Type'),
+    'Cost_of_install_AUD_kw': xr.concat([solar_exp_matched_masked, wind_exp_matched_masked], dim='Type'),
+    'distribution_loss_factor_multiplier': dlf_matched_masked,
+    'Cost_of_operation_AUD_kw': xr.concat([solar_opex_matched_masked, wind_opex_matched_masked], dim='Type'),
 })
 
 re_datasets_2D.to_netcdf(

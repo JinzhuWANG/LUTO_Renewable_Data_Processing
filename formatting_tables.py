@@ -81,9 +81,16 @@ for scneario, state, prod in product(re_targets['SCENARIO'].unique(), re_targets
         'Renewable_Target_TWh': t * (y - 2010) / 10
         } for y in range(2010, 2020) ]
     
+re_targets = pd.concat([re_targets, pd.DataFrame(rows)], ignore_index=True)
+
+# Add ACT targets into NSW (ACT is within NSW for LUTO purposes)
+act_targets = re_targets[re_targets['STATE'] == 'Australian Capital Territory'].copy()
+act_targets['STATE'] = 'New South Wales'
 re_targets = (
-    pd.concat([re_targets, pd.DataFrame(rows)], ignore_index=True)
-    .sort_values(['SCENARIO', 'STATE', 'PRODUCT', 'Year'])
+    pd.concat([re_targets, act_targets], ignore_index=True)
+    .groupby(['SCENARIO', 'STATE', 'PRODUCT', 'Year'], as_index=False)['Renewable_Target_TWh']
+    .sum()
+    .query("STATE != 'Australian Capital Territory'")
     .reset_index(drop=True)
 )
 
