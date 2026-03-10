@@ -32,8 +32,11 @@ for state in df['State'].unique():
     for year in range(2010, 2021):
         df = pd.concat([df, pd.DataFrame({'Year': [year], 'State': [state], 'Price_AUD_per_MWh': [price_2021]})], ignore_index=True)
 
-df = df.sort_values(['State', 'Year'])
+# Remove ACT from solar price table (ACT is within NSW for LUTO purposes, and we will just use the NSW price for ACT)
+df = df[df['State'] != 'Australian Capital Territory'].reset_index(drop=True).sort_values(['State', 'Year'])
 df.to_csv(f'{data_root}/processed/renewable_price_AUD_MWh_solar.csv', index=False)
+
+
 
 # Wind
 df = pd.read_csv(f'{data_root}/20260210/wind_elec_price_AUD_MWh.csv')
@@ -45,8 +48,9 @@ for state in df['State'].unique():
     price_2021 = df[(df['Year'] == 2021) & (df['State'] == state)]['Price_AUD_per_MWh'].values[0]
     for year in range(2010, 2021):
         df = pd.concat([df, pd.DataFrame({'Year': [year], 'State': [state], 'Price_AUD_per_MWh': [price_2021]})], ignore_index=True)
-        
-df = df.sort_values(['State', 'Year'])
+
+# Remove ACT from wind price table (ACT is within NSW for LUTO purposes, and we will just use the NSW price for ACT)
+df = df[df['State'] != 'Australian Capital Territory'].reset_index(drop=True).sort_values(['State', 'Year'])
 df.to_csv(f'{data_root}/processed/renewable_price_AUD_MWh_wind.csv', index=False)
 
 
@@ -57,41 +61,46 @@ df.to_csv(f'{data_root}/processed/renewable_price_AUD_MWh_wind.csv', index=False
 '''
 Just need to rename the abbreviated state names to full names to match other tables.
 '''
+re_targets = pd.read_csv(f'{data_root}/20260305/renewable_targets_20260305.csv')
+re_targets['state'] = re_targets['state'].map(state_rename)
+year_cols = [c for c in re_targets.columns if c.isdigit()]
 
-re_targets = pd.read_csv(f'{data_root}/20260127/renewable_targets.csv')
-re_targets['STATE'] = re_targets['STATE'].map(state_rename)
 re_targets = re_targets.melt(
-    id_vars=['SCENARIO', 'STATE', 'PRODUCT'], 
-    value_vars=[str(i) for i in range(2020, 2051)], 
+    id_vars=['scen', 'state', 'tech'], 
+    value_vars=year_cols,
     var_name='Year', 
     value_name='Renewable_Target_TWh'
 )
 re_targets['Year'] = re_targets['Year'].astype(int)
 
 
-# Linearly interpolate year 2010-2020 from 0 in 2010 to 2020 target in 2020
-rows = []
-for scneario, state, prod in product(re_targets['SCENARIO'].unique(), re_targets['STATE'].unique(), re_targets['PRODUCT'].unique()):
-    t = re_targets.query("SCENARIO == @scneario & STATE == @state & PRODUCT == @prod & Year == 2020")['Renewable_Target_TWh'].values[0]
-    rows += [{
-        'SCENARIO': scneario,
-        'STATE': state,
-        'PRODUCT': prod,
-        'Year': y,
-        'Renewable_Target_TWh': t * (y - 2010) / 10
-        } for y in range(2010, 2020) ]
-    
-re_targets = pd.concat([re_targets, pd.DataFrame(rows)], ignore_index=True)
-
 # Add ACT targets into NSW (ACT is within NSW for LUTO purposes)
-act_targets = re_targets[re_targets['STATE'] == 'Australian Capital Territory'].copy()
-act_targets['STATE'] = 'New South Wales'
+act_targets = re_targets.query("state == 'Australian Capital Territory'").copy()
+act_targets['state'] = 'New South Wales'
 re_targets = (
     pd.concat([re_targets, act_targets], ignore_index=True)
-    .groupby(['SCENARIO', 'STATE', 'PRODUCT', 'Year'], as_index=False)['Renewable_Target_TWh']
+    .groupby(['scen', 'state', 'tech', 'Year'], as_index=False)['Renewable_Target_TWh']
     .sum()
-    .query("STATE != 'Australian Capital Territory'")
+    .query("state != 'Australian Capital Territory'")
     .reset_index(drop=True)
+)
+
+# Linearly interpolate to fill annual years between 5-yr gaps (post-2030)
+all_years = list(range(re_targets['Year'].min(), re_targets['Year'].max() + 1))
+re_targets = (
+    re_targets
+    .groupby(['scen', 'state', 'tech'], group_keys=False)
+    [['scen', 'state', 'tech', 'Year', 'Renewable_Target_TWh']]
+    .apply(lambda df:
+        df.set_index('Year')['Renewable_Target_TWh']
+        .reindex(all_years)
+        .interpolate(method='index')
+        .rename_axis('Year')
+        .reset_index()
+        .assign(scen=df['scen'].iloc[0], state=df['state'].iloc[0], tech=df['tech'].iloc[0])
+    )
+    .reset_index(drop=True)
+    [['scen', 'state', 'tech', 'Year', 'Renewable_Target_TWh']]
 )
 
 re_targets.to_csv(f'{data_root}/processed/renewable_targets.csv', index=False)
