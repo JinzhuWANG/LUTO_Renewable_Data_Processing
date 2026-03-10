@@ -5,6 +5,12 @@ import xarray as xr
 from pathlib import Path
 from rasterio.enums import Resampling
 from scipy.ndimage import distance_transform_edt
+from tqdm.auto import tqdm
+
+
+# Read LUTO template
+luto_template = rxr.open_rasterio('N:/Data-Master/National_Landuse_Map/lumap.tif', masked=True).sel(band=1, drop=True)
+luto_mask = luto_template >= -1 
 
 
 # Function to fill values using nearest neighbor interpolation
@@ -14,95 +20,109 @@ def fill_with_nearest(data_2d:xr.DataArray, to_fill:float=0) -> np.ndarray:
     data_2d.values = data_2d.values[tuple(indices)]
     return data_2d
 
+def reproject_and_fill(raw_raster, template, mask, resampling=Resampling.nearest):
+    # Reproject and match to LUTO template
+    matched = raw_raster.rio.reproject_match(template, resampling=resampling).sel(band=1, drop=True)
+    # Fill nan values with nearest neighbor interpolation
+    filled = fill_with_nearest(matched)
+    # Mask to LUTO valid areas
+    masked = filled.where(mask)
+    return masked
 
-# Read LUTO template
-luto_template = rxr.open_rasterio('N:/Data-Master/National_Landuse_Map/lumap.tif', masked=True).sel(band=1, drop=True)
-luto_mask = luto_template >= -1 
 
+def load_tifs_as_xr(tifs, tech_name):
+    """Load year-stamped tifs into a DataArray with year and tech_name dims."""
+    results = []
+    for tif in tifs:
+        raw = rxr.open_rasterio(tif, masked=True).compute()
+        matched = (
+            reproject_and_fill(raw, luto_template, luto_mask)
+            .expand_dims({'year': [int(tif.stem[-4:])], 'tech_name': [tech_name]})
+        )
+        results.append(matched)
+    return xr.concat(results, dim='year')
 
 # ---------------------------------------------------
 #               capacity rasters            
 # ---------------------------------------------------
 
 raw_path = Path("N:/Data-Master/Renewable Energy/20260127/capacity_factor")
+
 raw_solar = rxr.open_rasterio(raw_path / "capacity_factor_solar.tif", masked=True).compute()
 raw_wind = rxr.open_rasterio(raw_path / "capacity_factor_wind.tif", masked=True).compute()
 
+raw_solar_matched = (
+    reproject_and_fill(raw_solar, luto_template, luto_mask)
+    .expand_dims({'year': list(range(2030,2051)), 'tech_name': ["Utility Solar PV"]})
+)
+raw_wind_matched = (
+    reproject_and_fill(raw_wind, luto_template, luto_mask)
+    .expand_dims({'year': list(range(2030,2051)), 'tech_name': ["Onshore Wind"]})
+)
 
-# Reproject and match to LUTO template
-solar_matched = raw_solar.rio.reproject_match(luto_template, resampling=Resampling.nearest).sel(band=1, drop=True)
-wind_matched = raw_wind.rio.reproject_match(luto_template, resampling=Resampling.nearest).sel(band=1, drop=True)
-
-# Fill nan values with nearest neighbor interpolation
-raw_solar_filled = fill_with_nearest(solar_matched)
-raw_wind_filled = fill_with_nearest(wind_matched)
-
-# Mask to LUTO valid areas
-solar_matched_masked = raw_solar_filled.where(luto_mask).expand_dims({'Type': ["Utility Solar PV"]})
-wind_matched_masked = raw_wind_filled.where(luto_mask).expand_dims({'Type': ["Onshore Wind"]})
-
+xr_capacity = xr.concat([raw_solar_matched, raw_wind_matched], dim='tech_name')
 
 
 # ---------------------------------------------------
-#               capacity expenditure rasters            
+#     Scenario-based rasters (capex, dlf, opex)
 # ---------------------------------------------------
 
-year = 2030
-raw_path_exp = Path("N:/Data-Master/Renewable Energy/20260127/capex")
-raw_solar_exp = rxr.open_rasterio(raw_path_exp / str(year) / f'solar_capex_{year}.tif', masked=True).compute()
-raw_wind_exp = rxr.open_rasterio(raw_path_exp / str(year) / f'wind_capex_{year}.tif', masked=True).compute()
+base_path = Path("N:/Data-Master/Renewable Energy/20260225")
 
-# Reproject and match to LUTO template
-solar_exp_matched = raw_solar_exp.rio.reproject_match(luto_template, resampling=Resampling.nearest).sel(band=1, drop=True)
-wind_exp_matched = raw_wind_exp.rio.reproject_match(luto_template, resampling=Resampling.nearest).sel(band=1, drop=True)
+scenarios = [
+    'step_change', 
+    'accelerated_transition', 
+    'ANU_transmission_T3', 
+    'ANU_transmission_T5', 
+    'ANU_transmission_T10'
+]
 
-# Fill nan values with nearest neighbor interpolation
-raw_solar_exp_filled = fill_with_nearest(solar_exp_matched, to_fill=0)
-raw_wind_exp_filled = fill_with_nearest(wind_exp_matched, to_fill=0)
-
-# Mask to LUTO valid areas
-solar_exp_matched_masked = raw_solar_exp_filled.where(luto_mask).expand_dims({'year': [year], 'Type': ["Utility Solar PV"]})
-wind_exp_matched_masked = raw_wind_exp_filled.where(luto_mask).expand_dims({'year': [year], 'Type': ["Onshore Wind"]})
-
+anu_path_map = {
+    'ANU_transmission_T3':  base_path / 'ANU_transmission/Top3_2050',
+    'ANU_transmission_T5':  base_path / 'ANU_transmission/Top5_2050',
+    'ANU_transmission_T10': base_path / 'ANU_transmission/Top10_2050',
+}
 
 
-# ---------------------------------------------------
-#            distribution loss factor          
-# ---------------------------------------------------
+capex_by_scenario = {}
+dlf_by_scenario = {}
+opex_by_scenario = {}
 
-year=2030
-raw_dlf_path = Path("N:/Data-Master/Renewable Energy/20260127/distribution_loss_factor")
-raw_dlf = rxr.open_rasterio(raw_dlf_path / str(year) / f'transmission_loss_{year}.tif', masked=True).compute()
+for scenario in tqdm(scenarios, desc='Scenarios'):
+    
+    if scenario in ('step_change', 'accelerated_transition'):
+        data_path = base_path / scenario
+    else:
+        data_path = anu_path_map[scenario]
 
-# Reproject and match to LUTO template
-dlf_matched = raw_dlf.rio.reproject_match(luto_template, resampling=Resampling.nearest).sel(band=1, drop=True)
-# Fill nan values with nearest neighbor interpolation
-raw_dlf_filled = fill_with_nearest(dlf_matched)
-# Mask to LUTO valid areas
-dlf_matched_masked = raw_dlf_filled.where(luto_mask).expand_dims({'year': [year]})
+    wind_capex_tifs  = sorted(data_path.rglob("wind_capex*.tif"))
+    solar_capex_tifs = sorted(data_path.rglob("solar_capex*.tif"))
+    dlf_tifs         = sorted(data_path.rglob("transmission_loss*.tif"))
+    wind_opex_tifs   = sorted(data_path.rglob("wind_opex*.tif"))
+    solar_opex_tifs  = sorted(data_path.rglob("solar_opex*.tif"))
+    
+    # Distribution loss does not have `tech_name` dimension
+    dlf_list = []
+    for tif in dlf_tifs:
+        raw = rxr.open_rasterio(tif, masked=True).compute()
+        dlf_list.append(
+            reproject_and_fill(raw, luto_template, luto_mask)
+            .expand_dims({'year': [int(tif.stem[-4:])]})
+        )
+    dlf_by_scenario[scenario] = xr.concat(dlf_list, dim='year')
 
+    # Capex and Opex have `tech_name` dimension, so we can use the helper function
+    capex_by_scenario[scenario] = xr.concat(
+        [load_tifs_as_xr(wind_capex_tifs, "Onshore Wind"),
+         load_tifs_as_xr(solar_capex_tifs, "Utility Solar PV")],
+        dim='tech_name'
+    )
 
-
-# ---------------------------------------------------
-#            operation expenditure rasters          
-# ---------------------------------------------------
-
-year = 2030
-raw_opex_path = Path("N:/Data-Master/Renewable Energy/20260127/opex")
-raw_solar_opex = rxr.open_rasterio(raw_opex_path / str(year) / f'solar_opex_{year}.tif', masked=True).compute()
-raw_wind_opex = rxr.open_rasterio(raw_opex_path / str(year) / f'wind_opex_{year}.tif', masked=True).compute()
-
-# Reproject and match to LUTO template
-solar_opex_matched = raw_solar_opex.rio.reproject_match(luto_template, resampling=Resampling.nearest).sel(band=1, drop=True)
-wind_opex_matched = raw_wind_opex.rio.reproject_match(luto_template, resampling=Resampling.nearest).sel(band=1, drop=True)
-
-# Fill nan values with nearest neighbor interpolation
-raw_solar_opex_filled = fill_with_nearest(solar_opex_matched)
-raw_wind_opex_filled = fill_with_nearest(wind_opex_matched)
-
-# Mask to LUTO valid areas
-solar_opex_matched_masked = raw_solar_opex_filled.where(luto_mask).expand_dims({'year': [year], 'Type': ["Utility Solar PV"]})
-wind_opex_matched_masked = raw_wind_opex_filled.where(luto_mask).expand_dims({'year': [year], 'Type': ["Onshore Wind"]})
+    opex_by_scenario[scenario] = xr.concat(
+        [load_tifs_as_xr(wind_opex_tifs, "Onshore Wind"),
+         load_tifs_as_xr(solar_opex_tifs, "Utility Solar PV")],
+        dim='tech_name'
+    )
 
 
 
@@ -110,20 +130,27 @@ wind_opex_matched_masked = raw_wind_opex_filled.where(luto_mask).expand_dims({'y
 #            Combine all rasters into nc          
 # ---------------------------------------------------
 
-# Save as 2D first
+# Combine all scenarios into single DataArrays with a new 'scenario' dimension
+xr_capex = xr.concat(
+    [capex_by_scenario[s].expand_dims({'scenario': [s]}) for s in scenarios],
+    dim='scenario'
+)
+xr_dlf = xr.concat(
+    [dlf_by_scenario[s].expand_dims({'scenario': [s]}) for s in scenarios],
+    dim='scenario'
+)
+xr_opex = xr.concat(
+    [opex_by_scenario[s].expand_dims({'scenario': [s]}) for s in scenarios],
+    dim='scenario'
+)
+
+# Get 2D first
 re_datasets_2D = xr.Dataset({
-    'capacity_factor_multiplier': xr.concat([solar_matched_masked, wind_matched_masked], dim='Type'),
-    'Cost_of_install_AUD_kw': xr.concat([solar_exp_matched_masked, wind_exp_matched_masked], dim='Type'),
-    'distribution_loss_factor_multiplier': dlf_matched_masked,
-    'Cost_of_operation_AUD_kw': xr.concat([solar_opex_matched_masked, wind_opex_matched_masked], dim='Type'),
+    'capacity_factor_multiplier': xr_capacity,
+    'Cost_of_install_AUD_kw': xr_capex,
+    'distribution_loss_factor_multiplier': xr_dlf,
+    'Cost_of_operation_AUD_kw': xr_opex,
 })
-
-re_datasets_2D.to_netcdf(
-    '../processed/renewable_energy_layers_2D.nc',
-    encoding={ var: {'zlib': True, 'complevel': 5} for var in re_datasets_2D.data_vars}
-    )
-
-
 
 # Save to 1D (LUTO long format)
 re_stacked = re_datasets_2D.stack(cell=('y', 'x'))
