@@ -61,9 +61,9 @@ df.to_csv(f'{data_root}/processed/renewable_price_AUD_MWh_wind.csv', index=False
 '''
 Just need to rename the abbreviated state names to full names to match other tables.
 '''
-re_targets = pd.read_csv(f'{data_root}/20260305/renewable_targets_20260305.csv')
+re_targets = pd.read_excel(f'{data_root}/20260327_CWC_RE_target/renewable_targets-input.xlsx', sheet_name='in')
 re_targets['state'] = re_targets['state'].map(state_rename)
-year_cols = [c for c in re_targets.columns if c.isdigit()]
+year_cols = [c for c in re_targets.columns if str(c).isnumeric()]
 
 re_targets = re_targets.melt(
     id_vars=['scen', 'state', 'tech'], 
@@ -94,6 +94,7 @@ re_targets = (
     .apply(lambda df:
         df.set_index('Year')['Renewable_Target_TWh']
         .reindex(all_years)
+        .apply(pd.to_numeric, errors='coerce')
         .interpolate(method='index')
         .rename_axis('Year')
         .reset_index()
