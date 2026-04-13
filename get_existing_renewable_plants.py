@@ -22,16 +22,48 @@ DATA_DIR = Path('N:/Data-Master')
 RE_DIR   = DATA_DIR / 'Renewable Energy'
 
 
+
+# -----------------------------------------------------------------------
+# LUTO reference grid
+# -----------------------------------------------------------------------
+
+luto_template  = rasterio.open(DATA_DIR / 'National_Landuse_Map/lumap.tif')
+ref_transform  = luto_template.transform
+ref_crs        = luto_template.crs
+ref_mask       = luto_template.read_masks(1).astype(bool)
+ref_shape      = (luto_template.height, luto_template.width)
+ref_meta_float = {**luto_template.meta, 'dtype': 'float32', 'nodata': np.nan}
+
+luto_template_xr = rxr.open_rasterio(DATA_DIR / 'National_Landuse_Map/lumap.tif', masked=True).sel(band=1, drop=True)
+
+
+lumap = pd.read_hdf(
+    'N:/Data-Master/LUTO_2.0_input_data/Input_data/2D_Spatial_Snapshot/cell_LU_mapping.h5', 
+    key = 'cell_LU_mapping', 
+    columns=['LU_DESC','LU_ID_LUTO']
+)
+idx_out_LUTO = np.isin(lumap['LU_DESC'], ['Non-agricultural land'])                 # shape=6956407, sum=2737674
+
+
+states = pd.read_hdf(
+    'N:/Data-Master/LUTO_2.0_input_data/Input_data/2D_Spatial_Snapshot/cell_zones_df.h5', 
+    key='cell_zones_df', 
+    columns=['STE_NAME11']
+)
+
+
+
+# -----------------------------------------------------------------------
+# Capacity factor rasters
+# -----------------------------------------------------------------------
+capacity_factor = xr.open_dataset(RE_DIR / 'processed/renewable_energy_layers_2D.nc')['capacity_factor_multiplier'].sel(year=2030, drop=True).compute()
+CF_SOLAR    = capacity_factor.sel(tech_name='Utility Solar PV')
+CF_WIND     = capacity_factor.sel(tech_name='Onshore Wind')
+
+
 # -----------------------------------------------------------------------
 # Constants
 # -----------------------------------------------------------------------
-
-CF_SOLAR    = rxr.open_rasterio(RE_DIR / 'processed/capacity_factor_solar_reproject_match.tif').sel(band=1, drop=True).compute()
-CF_WIND     = rxr.open_rasterio(RE_DIR / 'processed/capacity_factor_wind_reproject_match.tif').sel(band=1, drop=True).compute()
-HOURS       = 365 * 24      # Hours per year
-
-POWER_SOLAR = 0.45          # Average MWh per ha
-POWER_WIND  = 0.04          # Average MWh per ha
 
 # Capacity field priority (highest to lowest) — Solar
 # Priority 1: Agg Nameplate Capacity (MW AC)       - Aggregate-level + AC side; closest to grid-metered generation (37 rows)
@@ -60,34 +92,6 @@ CAPACITY_PRIORITY_WIND = [
     'Aggregated Upper Nameplate Capacity (MW)',
     'Upper Nameplate Capacity (MW)',
 ]
-
-
-# -----------------------------------------------------------------------
-# LUTO reference grid
-# -----------------------------------------------------------------------
-
-luto_template  = rasterio.open(DATA_DIR / 'National_Landuse_Map/lumap.tif')
-ref_transform  = luto_template.transform
-ref_crs        = luto_template.crs
-ref_mask       = luto_template.read_masks(1).astype(bool)
-ref_shape      = (luto_template.height, luto_template.width)
-ref_meta_float = {**luto_template.meta, 'dtype': 'float32', 'nodata': np.nan}
-
-
-lumap = pd.read_hdf(
-    'N:/Data-Master/LUTO_2.0_input_data/Input_data/2D_Spatial_Snapshot/cell_LU_mapping.h5', 
-    key = 'cell_LU_mapping', 
-    columns=['LU_DESC','LU_ID_LUTO']
-)
-idx_out_LUTO = np.isin(lumap['LU_DESC'], ['Non-agricultural land'])                 # shape=6956407, sum=2737674
-
-
-states = pd.read_hdf(
-    'N:/Data-Master/LUTO_2.0_input_data/Input_data/2D_Spatial_Snapshot/cell_zones_df.h5', 
-    key='cell_zones_df', 
-    columns=['STE_NAME11']
-)
-
 
 
 
@@ -125,13 +129,6 @@ def pick_capacity(row, priority_cols):
 luto_cells = build_luto_cells()
 luto_cells['area_ha_cell'] = luto_cells.geometry.to_crs('EPSG:3577').area / 10_000   # ha
 
-cell_area = np.where(ref_mask, 0.0, np.nan).astype(np.float32)
-for (r, c), prop in luto_cells.groupby(['row', 'col'])['area_ha_cell'].sum().items():
-    cell_area[r, c] = prop
-
-cell_area_xr      = xr.DataArray(cell_area, dims=('y', 'x'), coords={'y': CF_SOLAR.y, 'x': CF_SOLAR.x})
-cell_area_xr.name = 'data'
-cell_area_xr.to_netcdf(RE_DIR / 'processed/luto_cell_area_ha.nc', encoding={'data': {'dtype': 'float32', 'zlib': True, 'complevel': 5}})
 
 
 # -----------------------------------------------------------------------
@@ -186,11 +183,46 @@ re_solar_points = re_solar_points.loc[solar_idx['Final']].copy()
 re_wind_points  = re_wind_points.loc[wind_idx['Final']].copy()
 
 # 7) Add unified capacity column
-re_solar_points['Capacity (MW)'] = re_solar_points.apply(lambda r: pick_capacity(r, CAPACITY_PRIORITY_SOLAR)[0], axis=1)
-re_wind_points['Capacity (MW)']  = re_wind_points.apply( lambda r: pick_capacity(r, CAPACITY_PRIORITY_WIND)[0],  axis=1)
+re_solar_points['Capacity (MW)'] = re_solar_points.apply(lambda r: pick_capacity(r, CAPACITY_PRIORITY_SOLAR)[0], axis=1) 
+re_wind_points['Capacity (MW)']  = re_wind_points.apply( lambda r: pick_capacity(r, CAPACITY_PRIORITY_WIND)[0],  axis=1) 
 
-re_solar_points.to_file(RE_DIR / '20260305/Network Map Renewables January 2026_AUS points_solar_filtered.gpkg')
-re_wind_points.to_file(RE_DIR / '20260305/Network Map Renewables January 2026_AUS points_wind_filtered.gpkg')
+# 8) Remove points without a valid commission year
+#    CSVs were manually populated (via Google Earth) with a 'Commision Year' column.
+#    Rows with a blank year (Cancelled, not visible from map, etc.) are excluded.
+
+re_solar_df = re_solar_points[['Site Name','geometry']].copy()
+re_solar_df['coords'] = list(zip(re_solar_df.geometry.y.round(2), re_solar_df.geometry.x.round(2)))
+if (RE_DIR / 'processed/renewable_existing_capacity_commision_year_solar_points.csv').exists():
+    commision_year_solar = pd.read_csv(RE_DIR / 'processed/renewable_existing_capacity_commision_year_solar_points.csv')
+    commision_year_solar['Commision Year'] = commision_year_solar['Commision Year'].astype('Int16')   # Convert to nullable integer type
+    commision_year_solar = commision_year_solar.dropna(subset=['Commision Year'])
+    valid_solar_sites = commision_year_solar['Site Name']
+    solar_idx['Removing No commission year'] = re_solar_points.index[~re_solar_points['Site Name'].isin(valid_solar_sites)]
+    solar_idx['Final'] = re_solar_points.index[re_solar_points['Site Name'].isin(valid_solar_sites)]
+    re_solar_points = re_solar_points.loc[solar_idx['Final']].copy()
+else:
+    re_solar_df.drop('geometry', axis=1).to_csv(RE_DIR / 'processed/renewable_existing_capacity_commision_year_solar_points.csv', index=False)
+    solar_idx['Removing No commission year'] = re_solar_points.index[[]]
+
+re_wind_df = re_wind_points[['Site Name','geometry']].copy()
+re_wind_df['coords'] = list(zip(re_wind_df.geometry.y.round(2), re_wind_df.geometry.x.round(2)))
+if (RE_DIR / 'processed/renewable_existing_capacity_commision_year_wind_points.csv').exists():
+    commision_year_wind = pd.read_csv(RE_DIR / 'processed/renewable_existing_capacity_commision_year_wind_points.csv')
+    commision_year_wind['Commision Year'] = commision_year_wind['Commision Year'].astype('Int16')   # Convert to nullable integer type
+    commision_year_wind = commision_year_wind.dropna(subset=['Commision Year'])
+    valid_wind_sites = commision_year_wind['Site Name']
+    wind_idx['Removing No commission year'] = re_wind_points.index[~re_wind_points['Site Name'].isin(valid_wind_sites)]
+    wind_idx['Final'] = re_wind_points.index[re_wind_points['Site Name'].isin(valid_wind_sites)]
+    re_wind_points = re_wind_points.loc[wind_idx['Final']].copy()
+else:
+    re_wind_df.drop('geometry', axis=1).to_csv(RE_DIR / 'processed/renewable_existing_capacity_commision_year_wind_points.csv', index=False)
+    wind_idx['Removing No commission year'] = re_wind_points.index[[]]
+    
+commision_years = range(
+    min(commision_year_solar['Commision Year'].min(), commision_year_wind['Commision Year'].min()), 
+    max(commision_year_solar['Commision Year'].max(), commision_year_wind['Commision Year'].max()) + 1
+)
+
 
 # Cascade allocation tables
 for tech, idx, priority_cols in [('Solar', solar_idx, CAPACITY_PRIORITY_SOLAR), ('Wind', wind_idx, CAPACITY_PRIORITY_WIND)]:
@@ -203,6 +235,7 @@ for tech, idx, priority_cols in [('Solar', solar_idx, CAPACITY_PRIORITY_SOLAR), 
         + [(f'Remaining after status filter',        len(idx['Status kept']))]
         + [(f'  Keep: {col}',                       len(idx[f'Keeping {col}'])) for col in priority_cols]
         + [(f'  Remove: No capacity data',         -len(idx['Removing No capacity']))]
+        + [(f'  Remove: No commission year',        -len(idx['Removing No commission year']))]
         + [(f'Final {tech.lower()} points used',    len(idx['Final']))]
     )
     for _label, _count in _steps:
@@ -211,29 +244,85 @@ for tech, idx, priority_cols in [('Solar', solar_idx, CAPACITY_PRIORITY_SOLAR), 
 
 
 
+# -----------------------------------------------------------------------
+# Calculate effective capacity, save filtered points for reference
+# -----------------------------------------------------------------------
+coords_x_solar = xr.DataArray(re_solar_points.geometry.x.values, dims='cell')
+coords_y_solar = xr.DataArray(re_solar_points.geometry.y.values, dims='cell')
+coords_x_wind  = xr.DataArray(re_wind_points.geometry.x.values, dims='cell')
+coords_y_wind  = xr.DataArray(re_wind_points.geometry.y.values, dims='cell')
 
-
-# Dissolve polygons by technology type to get unified areas.
-#   Otherwise, overlapping polygons (e.g. multiple projects in the same area)
-#   would lead to double-counting of generation potential.
-re_solar_polys = solar_polys_raw[solar_polys_raw['Site Name'].isin(re_solar_points['Site Name'])].copy()
-re_solar_polys['geometry'] = [unary_union(shp.buffer(0)) for shp in re_solar_polys['geometry']]
-
-re_wind_polys  = wind_polys_raw[wind_polys_raw['Site Name'].isin(re_wind_points['Site Name'])].copy()
-re_wind_polys['geometry'] = [unary_union(shp.buffer(0)) for shp in re_wind_polys['geometry']]
-
-
-# Calculate capacity/ha
-capacity_per_ha_solar = gpd.GeoDataFrame(
-    re_solar_points[['Site Name', 'Capacity (MW)']].merge(re_solar_polys[['Site Name', 'area_ha', 'geometry']], on='Site Name')
+re_solar_points['Capacity (MW)'] = (
+    re_solar_points['Capacity (MW)']
+    * CF_SOLAR.interp(x=coords_x_solar, y=coords_y_solar, method='nearest').values
 )
-capacity_per_ha_wind  = gpd.GeoDataFrame(
-    re_wind_points[['Site Name', 'Capacity (MW)']].merge(re_wind_polys[['Site Name', 'area_ha', 'geometry']], on='Site Name')
+re_wind_points['Capacity (MW)']  = (
+    re_wind_points['Capacity (MW)']
+    * CF_WIND.interp(x=coords_x_wind, y=coords_y_wind, method='nearest').values
 )
 
+re_solar_points.to_file(RE_DIR / '20260305/Network Map Renewables January 2026_AUS points_solar_filtered.gpkg')
+re_wind_points.to_file(RE_DIR / '20260305/Network Map Renewables January 2026_AUS points_wind_filtered.gpkg')
+
+
+
+# -----------------------------------------------------------------------
+# Get the capacity MW
+# -----------------------------------------------------------------------
+
+# Dissolve overlapping/touching polygons into unified spatial groups to avoid
+#   double-counting when multiple projects (e.g. Stage 1 + Stage 2) share the same land.
+#   Capacity is summed across all sites in each group; commission year is taken as the
+#   earliest year in the group (first stage operational = when the cell becomes active).
+
+capacity_per_ha_solar_rows = []
+capacity_per_ha_wind_rows  = []
+
+for polys_raw, points_filtered, commision_year_df, out_rows in [
+    (solar_polys_raw, re_solar_points, commision_year_solar, capacity_per_ha_solar_rows),
+    (wind_polys_raw,  re_wind_points,  commision_year_wind,  capacity_per_ha_wind_rows),
+]:
+    # 1. Filter polys to sites with known capacity, fix self-intersections
+    polys = (
+        polys_raw[polys_raw['Site Name']
+        .isin(points_filtered['Site Name'])][['Site Name', 'geometry']]
+        .merge(points_filtered[['Site Name', 'Capacity (MW)']], on='Site Name')
+        .merge(commision_year_df[['Site Name', 'Commision Year']], on='Site Name')
+        .reset_index(drop=True)
+    )
+    polys['geometry'] = [unary_union(shp.buffer(0)) for shp in polys['geometry']]
+
+    # 2. Find and dissolve intersecting polygons into single groups
+    remaining = list(polys.index)
+    while remaining:
+        i = remaining.pop(0)
+        geom      = polys.at[i, 'geometry']
+        capacity  = polys.at[i, 'Capacity (MW)']
+        comm_year = polys.at[i, 'Commision Year']
+
+        merged = True
+        while merged:
+            merged   = False
+            absorbed = []
+            for j in remaining:
+                if geom.intersects(polys.at[j, 'geometry']):
+                    geom      = unary_union([geom, polys.at[j, 'geometry']])
+                    capacity += polys.at[j, 'Capacity (MW)']
+                    comm_year = min(comm_year, polys.at[j, 'Commision Year'])
+                    absorbed.append(j)
+                    merged = True
+            for j in absorbed:
+                remaining.remove(j)
+
+        out_rows.append({'geometry': geom, 'Capacity (MW)': capacity, 'Commision Year': comm_year})
+
+capacity_per_ha_solar = gpd.GeoDataFrame(capacity_per_ha_solar_rows, crs=solar_polys_raw.crs)
+capacity_per_ha_solar['area_ha'] = capacity_per_ha_solar.geometry.to_crs('EPSG:3577').area / 10_000
 capacity_per_ha_solar['Capacity per ha (MW/ha)'] = capacity_per_ha_solar['Capacity (MW)'] / capacity_per_ha_solar['area_ha']
-capacity_per_ha_wind['Capacity per ha (MW/ha)']   = capacity_per_ha_wind['Capacity (MW)'] / capacity_per_ha_wind['area_ha']
 
+capacity_per_ha_wind = gpd.GeoDataFrame(capacity_per_ha_wind_rows, crs=wind_polys_raw.crs)
+capacity_per_ha_wind['area_ha'] = capacity_per_ha_wind.geometry.to_crs('EPSG:3577').area / 10_000
+capacity_per_ha_wind['Capacity per ha (MW/ha)'] = capacity_per_ha_wind['Capacity (MW)'] / capacity_per_ha_wind['area_ha']
 
 
 # -----------------------------------------------------------------------
@@ -245,10 +334,37 @@ isect = gpd.overlay(capacity_per_ha_solar, luto_cells, how='intersection')
 isect['area_insec'] = isect.geometry.to_crs('EPSG:3577').area / 10_000   # ha
 isect['capacity_MW_insec'] = isect['area_insec'] * isect['Capacity per ha (MW/ha)']
 
-# Write into output array
-solar_MW_xr = xr.DataArray(np.where(ref_mask, 0.0, np.nan).astype(np.float32), dims=('y', 'x'), coords={'y': CF_SOLAR.y, 'x': CF_SOLAR.x})
-for (r, c), prop in isect.groupby(['row', 'col'])['capacity_MW_insec'].sum().items():
-    solar_MW_xr[r, c] = prop
+
+# Get capacity in each cell
+solar_MW_xr = xr.DataArray(
+    np.where(ref_mask, 0.0, np.nan).astype(np.float32),
+    dims=('y', 'x'),
+    coords={
+        'y': luto_template_xr.y,
+        'x': luto_template_xr.x
+    }
+).expand_dims({'year': commision_years}, axis=0).copy()
+
+
+for (yr, r, c), prop in isect.groupby(['Commision Year', 'row', 'col'])['capacity_MW_insec'].sum().items():
+    solar_MW_xr.loc[dict(year=yr, y=luto_template_xr.y[r], x=luto_template_xr.x[c])] = prop
+
+# Get area fraction of solar within each cell
+isect['area_insec_frac'] = isect['area_insec'] / isect['area_ha_cell']   # sanity check — should be <=1 for all rows
+cell_frac_solar = isect.groupby(['row', 'col'])['area_insec_frac'].sum().reset_index()
+
+solar_frac_xr = xr.DataArray(
+    np.where(ref_mask, 0.0, np.nan).astype(np.float32),
+    dims=('y', 'x'),
+    coords={
+        'y': luto_template_xr.y,
+        'x': luto_template_xr.x
+    }
+)
+
+for _, row in cell_frac_solar.iterrows():
+    solar_frac_xr[int(row['row']), int(row['col'])] = row['area_insec_frac']
+
 
 
 # -----------------------------------------------------------------------
@@ -260,11 +376,34 @@ isect_wind = gpd.overlay(capacity_per_ha_wind, luto_cells, how='intersection')
 isect_wind['area_insec'] = isect_wind.geometry.to_crs('EPSG:3577').area / 10_000   # ha
 isect_wind['capacity_MW_insec'] = isect_wind['area_insec'] * isect_wind['Capacity per ha (MW/ha)']
 
-# Write into output array
-wind_MW_xr = xr.DataArray(np.where(ref_mask, 0.0, np.nan).astype(np.float32), dims=('y', 'x'), coords={'y': CF_WIND.y, 'x': CF_WIND.x})
-for (r, c), prop in isect_wind.groupby(['row', 'col'])['capacity_MW_insec'].sum().items():
-    wind_MW_xr[r, c] = prop
+# Get capacity in each cell
+wind_MW_xr = xr.DataArray(
+    np.where(ref_mask, 0.0, np.nan).astype(np.float32),
+    dims=('y', 'x'),
+    coords={
+        'y': luto_template_xr.y,
+        'x': luto_template_xr.x
+    }
+).expand_dims({'year': commision_years}, axis=0).copy()
 
+for (yr, r, c), prop in isect_wind.groupby(['Commision Year', 'row', 'col'])['capacity_MW_insec'].sum().items():
+    wind_MW_xr.loc[dict(year=yr, y=luto_template_xr.y[r], x=luto_template_xr.x[c])] = prop
+
+# Get area fraction of wind within each cell
+isect_wind['area_insec_frac'] = isect_wind['area_insec'] / isect_wind['area_ha_cell']   # sanity check — should be <=1 for all rows
+cell_frac_wind = isect_wind.groupby(['row', 'col'])['area_insec_frac'].sum().reset_index()
+
+wind_frac_xr = xr.DataArray(
+    np.where(ref_mask, 0.0, np.nan).astype(np.float32),
+    dims=('y', 'x'),
+    coords={
+        'y': luto_template_xr.y,
+        'x': luto_template_xr.x
+    }
+)
+
+for _, row in cell_frac_wind.iterrows():
+    wind_frac_xr[int(row['row']), int(row['col'])] = row['area_insec_frac']
 
 
 
@@ -273,46 +412,62 @@ for (r, c), prop in isect_wind.groupby(['row', 'col'])['capacity_MW_insec'].sum(
 # -----------------------------------------------------------------------
 
 # Save 2D
-existing_solar_capacity = xr.concat(
+existing_re_capacity = xr.concat(
     [
-        wind_MW_xr.expand_dims({'tech_name': ['Onshore Wind']}), 
+        wind_MW_xr.expand_dims({'tech_name': ['Onshore Wind']}),
         solar_MW_xr.expand_dims({'tech_name': ['Utility Solar PV']})
     ],
     dim='tech_name'
 )
+existing_re_capacity.name = 'capacity_MW'
+existing_re_capacity.to_netcdf(
+    RE_DIR / 'processed/renewable_existing_capacity_MW_2D.nc',
+    encoding={'capacity_MW': {'dtype': 'float32', 'zlib': True, 'complevel': 5}}
+)
 
-existing_solar_capacity.name = 'capacity_MW'
-existing_solar_capacity.to_netcdf(RE_DIR / 'processed/renewable_existing_capacity_MW_2D.nc', encoding={'capacity_MW': {'dtype': 'float32', 'zlib': True, 'complevel': 5}})
 
-# Save 1D 
-existing_solar_capacity_1D = (
-    existing_solar_capacity.stack(z=('y', 'x'))
-    .sel(z=~solar_MW_xr.stack(z=('y', 'x')).isnull())
+existing_re_frac = xr.concat(
+    [
+        wind_frac_xr.expand_dims({'tech_name': ['Onshore Wind']}),
+        solar_frac_xr.expand_dims({'tech_name': ['Utility Solar PV']})
+    ],
+    dim='tech_name'
+)
+existing_re_frac.name = 'capacity_area_fraction'
+existing_re_frac.to_netcdf(
+    RE_DIR / 'processed/renewable_existing_capacity_area_fraction_2D.nc',
+    encoding={'capacity_area_fraction': {'dtype': 'float32', 'zlib': True, 'complevel': 5}}
+)
+
+
+# Save 1D
+existing_re_capacity_1D = (
+    existing_re_capacity.stack(z=('y', 'x'))
+    .sel(z=~luto_template_xr.stack(z=('y', 'x')).isnull())
     .drop_vars('z')
     .rename({'z': 'cell'})
     .assign_coords(cell=range(len(luto_cells)))
 )
-existing_solar_capacity_1D.to_netcdf(RE_DIR / 'processed/renewable_existing_capacity_MW_1D.nc', encoding={'capacity_MW': {'dtype': 'float32', 'zlib': True, 'complevel': 5}})
+existing_re_capacity_1D.to_netcdf(
+    RE_DIR / 'processed/renewable_existing_capacity_MW_1D.nc',
+    encoding={'capacity_MW': {'dtype': 'float32', 'zlib': True, 'complevel': 5}}
+)
+
+
+existing_re_frac_1D = (
+    existing_re_frac.stack(z=('y', 'x'))
+    .sel(z=~luto_template_xr.stack(z=('y', 'x')).isnull())
+    .drop_vars('z')
+    .rename({'z': 'cell'})
+    .assign_coords(cell=range(len(luto_cells)))
+)
+existing_re_frac_1D.to_netcdf(
+    RE_DIR / 'processed/renewable_existing_capacity_area_fraction_1D.nc',
+    encoding={'capacity_area_fraction': {'dtype': 'float32', 'zlib': True, 'complevel': 5}}
+)
 
 
 
-
-# -----------------------------------------------------------------------
-# Calculate the outside-LUTO power generation
-# -----------------------------------------------------------------------
-
-out_power = {}
-for state in states['STE_NAME11'].unique():
-    outside_state_mask = ((states['STE_NAME11'] == state) & idx_out_LUTO).values
-    if state not in out_power.keys():
-        out_power[state] = {}
-        
-    out_power[state]['Utility Solar PV'] = (existing_solar_capacity_1D.sel(tech_name='Utility Solar PV') * outside_state_mask).sum().item()
-    out_power[state]['Onshore Wind'] = (existing_solar_capacity_1D.sel(tech_name='Onshore Wind') * outside_state_mask).sum().item()
-        
-
-out_power_df = pd.DataFrame(out_power).T.reset_index().rename(columns={'index': 'State'})
-out_power_df.to_csv(RE_DIR / 'processed/renewable_existing_capacity_outside_LUTO_by_state.csv', index=False)
 
 
 
