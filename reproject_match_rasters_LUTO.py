@@ -45,6 +45,7 @@ def load_tifs_as_xr(tifs, tech_name):
         results.append(matched)
     return xr.concat(results, dim='year')
 
+
 # ---------------------------------------------------
 #               capacity rasters            
 # ---------------------------------------------------
@@ -56,19 +57,19 @@ raw_wind = rxr.open_rasterio(raw_path / "capacity_factor_wind.tif", masked=True)
 
 raw_solar_matched = (
     reproject_and_fill(raw_solar, luto_template, luto_mask)
-    .expand_dims({'year': list(range(2030,2051)), 'tech_name': ["Utility Solar PV"]})
+    .expand_dims({'tech_name': ["Utility Solar PV"]})
 )
 raw_wind_matched = (
     reproject_and_fill(raw_wind, luto_template, luto_mask)
-    .expand_dims({'year': list(range(2030,2051)), 'tech_name': ["Onshore Wind"]})
+    .expand_dims({'tech_name': ["Onshore Wind"]})
 )
 
 xr_capacity = xr.concat([raw_solar_matched, raw_wind_matched], dim='tech_name')
 
 # Save to geoTIFF, which can be used in getting the existing renewable plants
-arr_solar = raw_solar_matched.sel(year=2030, drop=True)
+arr_solar = raw_solar_matched.sel(tech_name="Utility Solar PV", drop=True)
 arr_solar.rio.to_raster(renewable_path / "processed/capacity_factor_solar_reproject_match.tif", dtype=np.float32, compress='lzw')
-arr_wind = raw_wind_matched.sel(year=2030, drop=True)
+arr_wind = raw_wind_matched.sel(tech_name="Onshore Wind", drop=True)
 arr_wind.rio.to_raster(renewable_path / "processed/capacity_factor_wind_reproject_match.tif", dtype=np.float32, compress='lzw')
 
 # ---------------------------------------------------
@@ -134,8 +135,16 @@ for scenario in tqdm(scenarios, desc='Scenarios'):
 
 
 
+# ANU scenarios only provide 2050 data; broadcast constant values to all years
+full_years = dlf_by_scenario['step_change']['year'].values
+for s in [sc for sc in scenarios if sc.startswith('ANU')]:
+    dlf_by_scenario[s]   = dlf_by_scenario[s].reindex(year=full_years, method='nearest')
+    capex_by_scenario[s] = capex_by_scenario[s].reindex(year=full_years, method='nearest')
+    opex_by_scenario[s]  = opex_by_scenario[s].reindex(year=full_years, method='nearest')
+
+
 # ---------------------------------------------------
-#            Combine all rasters into nc          
+#            Combine all rasters into nc
 # ---------------------------------------------------
 
 # Combine all scenarios into single DataArrays with a new 'scenario' dimension
@@ -159,11 +168,12 @@ re_datasets_2D = xr.Dataset({
     'distribution_loss_factor_multiplier': xr_dlf,
     'Cost_of_operation_AUD_kw': xr_opex,
 })
-
 re_datasets_2D.to_netcdf(
     renewable_path / 'processed/renewable_energy_layers_2D.nc',
     encoding={ var: {'zlib': True, 'complevel': 5} for var in re_datasets_2D.data_vars}
 )
+
+
 
 # Save to 1D (LUTO long format)
 re_stacked = re_datasets_2D.stack(cell=('y', 'x'))

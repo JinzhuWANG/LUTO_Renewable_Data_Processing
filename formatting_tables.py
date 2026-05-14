@@ -32,8 +32,11 @@ for state in df['State'].unique():
     for year in range(2010, 2021):
         df = pd.concat([df, pd.DataFrame({'Year': [year], 'State': [state], 'Price_AUD_per_MWh': [price_2021]})], ignore_index=True)
 
-# Remove ACT from solar price table (ACT is within NSW for LUTO purposes, and we will just use the NSW price for ACT)
-df = df[df['State'] != 'Australian Capital Territory'].reset_index(drop=True).sort_values(['State', 'Year'])
+# ACT is within NSW for LUTO purposes — overwrite ACT prices with NSW prices
+nsw_solar = df[df['State'] == 'New South Wales'].set_index('Year')['Price_AUD_per_MWh']
+df.loc[df['State'] == 'Australian Capital Territory', 'Price_AUD_per_MWh'] = \
+    df.loc[df['State'] == 'Australian Capital Territory', 'Year'].map(nsw_solar).values
+
 df.to_csv(f'{data_root}/processed/renewable_price_AUD_MWh_solar.csv', index=False)
 
 
@@ -49,8 +52,11 @@ for state in df['State'].unique():
     for year in range(2010, 2021):
         df = pd.concat([df, pd.DataFrame({'Year': [year], 'State': [state], 'Price_AUD_per_MWh': [price_2021]})], ignore_index=True)
 
-# Remove ACT from wind price table (ACT is within NSW for LUTO purposes, and we will just use the NSW price for ACT)
-df = df[df['State'] != 'Australian Capital Territory'].reset_index(drop=True).sort_values(['State', 'Year'])
+# ACT is within NSW for LUTO purposes — overwrite ACT prices with NSW prices
+nsw_wind = df[df['State'] == 'New South Wales'].set_index('Year')['Price_AUD_per_MWh']
+df.loc[df['State'] == 'Australian Capital Territory', 'Price_AUD_per_MWh'] = \
+    df.loc[df['State'] == 'Australian Capital Territory', 'Year'].map(nsw_wind).values
+
 df.to_csv(f'{data_root}/processed/renewable_price_AUD_MWh_wind.csv', index=False)
 
 

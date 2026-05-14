@@ -56,9 +56,7 @@ states = pd.read_hdf(
 # -----------------------------------------------------------------------
 # Capacity factor rasters
 # -----------------------------------------------------------------------
-capacity_factor = xr.open_dataset(RE_DIR / 'processed/renewable_energy_layers_2D.nc')['capacity_factor_multiplier'].sel(year=2030, drop=True).compute()
-CF_SOLAR    = capacity_factor.sel(tech_name='Utility Solar PV')
-CF_WIND     = capacity_factor.sel(tech_name='Onshore Wind')
+capacity_factor = xr.open_dataset(RE_DIR / 'processed/renewable_energy_layers_2D.nc')['capacity_factor_multiplier'].compute()
 
 
 # -----------------------------------------------------------------------
@@ -252,18 +250,8 @@ coords_y_solar = xr.DataArray(re_solar_points.geometry.y.values, dims='cell')
 coords_x_wind  = xr.DataArray(re_wind_points.geometry.x.values, dims='cell')
 coords_y_wind  = xr.DataArray(re_wind_points.geometry.y.values, dims='cell')
 
-re_solar_points['Capacity (MW)'] = (
-    re_solar_points['Capacity (MW)']
-    * CF_SOLAR.interp(x=coords_x_solar, y=coords_y_solar, method='nearest').values
-)
-re_wind_points['Capacity (MW)']  = (
-    re_wind_points['Capacity (MW)']
-    * CF_WIND.interp(x=coords_x_wind, y=coords_y_wind, method='nearest').values
-)
-
 re_solar_points.to_file(RE_DIR / '20260305/Network Map Renewables January 2026_AUS points_solar_filtered.gpkg')
 re_wind_points.to_file(RE_DIR / '20260305/Network Map Renewables January 2026_AUS points_wind_filtered.gpkg')
-
 
 
 # -----------------------------------------------------------------------
@@ -351,19 +339,18 @@ for (yr, r, c), prop in isect.groupby(['Commision Year', 'row', 'col'])['capacit
 
 # Get area fraction of solar within each cell
 isect['area_insec_frac'] = isect['area_insec'] / isect['area_ha_cell']   # sanity check — should be <=1 for all rows
-cell_frac_solar = isect.groupby(['row', 'col'])['area_insec_frac'].sum().reset_index()
 
 solar_frac_xr = xr.DataArray(
     np.where(ref_mask, 0.0, np.nan).astype(np.float32),
-    dims=('y', 'x'),
+    dims=( 'y', 'x'),
     coords={
         'y': luto_template_xr.y,
         'x': luto_template_xr.x
     }
-)
+).expand_dims({'year': commision_years}, axis=0).copy()
 
-for _, row in cell_frac_solar.iterrows():
-    solar_frac_xr[int(row['row']), int(row['col'])] = row['area_insec_frac']
+for (yr, r, c), prop in isect.groupby(['Commision Year', 'row', 'col'])['area_insec_frac'].sum().items():
+    solar_frac_xr.loc[dict(year=yr, y=luto_template_xr.y[r], x=luto_template_xr.x[c])] = prop
 
 
 
@@ -391,27 +378,25 @@ for (yr, r, c), prop in isect_wind.groupby(['Commision Year', 'row', 'col'])['ca
 
 # Get area fraction of wind within each cell
 isect_wind['area_insec_frac'] = isect_wind['area_insec'] / isect_wind['area_ha_cell']   # sanity check — should be <=1 for all rows
-cell_frac_wind = isect_wind.groupby(['row', 'col'])['area_insec_frac'].sum().reset_index()
 
 wind_frac_xr = xr.DataArray(
     np.where(ref_mask, 0.0, np.nan).astype(np.float32),
-    dims=('y', 'x'),
+    dims=( 'y', 'x'),
     coords={
         'y': luto_template_xr.y,
         'x': luto_template_xr.x
     }
-)
+).expand_dims({'year': commision_years}, axis=0).copy()
 
-for _, row in cell_frac_wind.iterrows():
-    wind_frac_xr[int(row['row']), int(row['col'])] = row['area_insec_frac']
-
+for (yr, r, c), prop in isect_wind.groupby(['Commision Year', 'row', 'col'])['area_insec_frac'].sum().items():
+    wind_frac_xr.loc[dict(year=yr, y=luto_template_xr.y[r], x=luto_template_xr.x[c])] = prop
 
 
 # -----------------------------------------------------------------------
 # Save xarray outputs
 # -----------------------------------------------------------------------
 
-# Save 2D
+# Save capacity MW
 existing_re_capacity = xr.concat(
     [
         wind_MW_xr.expand_dims({'tech_name': ['Onshore Wind']}),
@@ -425,22 +410,6 @@ existing_re_capacity.to_netcdf(
     encoding={'capacity_MW': {'dtype': 'float32', 'zlib': True, 'complevel': 5}}
 )
 
-
-existing_re_frac = xr.concat(
-    [
-        wind_frac_xr.expand_dims({'tech_name': ['Onshore Wind']}),
-        solar_frac_xr.expand_dims({'tech_name': ['Utility Solar PV']})
-    ],
-    dim='tech_name'
-)
-existing_re_frac.name = 'capacity_area_fraction'
-existing_re_frac.to_netcdf(
-    RE_DIR / 'processed/renewable_existing_capacity_area_fraction_2D.nc',
-    encoding={'capacity_area_fraction': {'dtype': 'float32', 'zlib': True, 'complevel': 5}}
-)
-
-
-# Save 1D
 existing_re_capacity_1D = (
     existing_re_capacity.stack(z=('y', 'x'))
     .sel(z=~luto_template_xr.stack(z=('y', 'x')).isnull())
@@ -454,6 +423,22 @@ existing_re_capacity_1D.to_netcdf(
 )
 
 
+
+# Save fraction 
+existing_re_frac = xr.concat(
+    [
+        wind_frac_xr.expand_dims({'tech_name': ['Onshore Wind']}),
+        solar_frac_xr.expand_dims({'tech_name': ['Utility Solar PV']})
+    ],
+    dim='tech_name'
+)
+
+existing_re_frac.name = 'capacity_area_fraction'
+existing_re_frac.to_netcdf(
+    RE_DIR / 'processed/renewable_existing_capacity_area_fraction_2D.nc',
+    encoding={'capacity_area_fraction': {'dtype': 'float32', 'zlib': True, 'complevel': 5}}
+)
+
 existing_re_frac_1D = (
     existing_re_frac.stack(z=('y', 'x'))
     .sel(z=~luto_template_xr.stack(z=('y', 'x')).isnull())
@@ -465,8 +450,6 @@ existing_re_frac_1D.to_netcdf(
     RE_DIR / 'processed/renewable_existing_capacity_area_fraction_1D.nc',
     encoding={'capacity_area_fraction': {'dtype': 'float32', 'zlib': True, 'complevel': 5}}
 )
-
-
 
 
 
